@@ -4,12 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, LogOut, PanelLeft, Cpu, Brain, ChevronUp, ChevronDown, Square } from "lucide-react";
 import {
+  ACTIVE_CONVERSATION_KEY,
   api,
   tokenStore,
   type ConversationResponse,
   type MessageResponse,
   type UserResponse,
 } from "../lib/api";
+import { Markdown } from "../components/Markdown";
 
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" } as const;
 
@@ -45,6 +47,13 @@ const HomePage = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const thinkingScrollRef = useRef<HTMLDivElement>(null);
 
+  // Captured once at first render, before any effect gets a chance to touch
+  // sessionStorage (the "keep active session recoverable" effect below wipes
+  // the key as soon as it sees activeId === null on mount).
+  const savedConversationIdRef = useRef<string | null>(
+    typeof window === "undefined" ? null : sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)
+  );
+
   // ---------- bootstrap: require auth, load user + sessions ----------
   useEffect(() => {
     if (!tokenStore.access) {
@@ -56,6 +65,12 @@ const HomePage = () => {
         const [me, convos] = await Promise.all([api.getMe(), api.getConversations()]);
         setUser(me);
         setConversations(convos.items);
+        // Restore whatever session was open before navigating away (e.g. to
+        // /settings) so "back to chat" doesn't dump the user into a new chat.
+        const savedId = savedConversationIdRef.current;
+        if (savedId && convos.items.some((c) => c.id === savedId)) {
+          setActiveId(savedId);
+        }
       } catch {
         tokenStore.clear();
         router.replace("/login");
@@ -72,8 +87,18 @@ const HomePage = () => {
     })();
   }, [router]);
 
+  // ---------- keep the active session recoverable across navigation ----------
+  useEffect(() => {
+    if (activeId) sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, activeId);
+    else sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+  }, [activeId]);
+
   // ---------- load messages when switching sessions ----------
   const jumpToBottomRef = useRef(false);
+  const skipNextLoadRef = useRef(false); // set by handleSend right before setActiveId()
+                                          // when it just created a brand-new conversation,
+                                          // so the effect below doesn't fetch-and-overwrite
+                                          // the messages handleSend is already streaming in.
 
   useEffect(() => {
     setModelMenuOpen(false);
@@ -81,6 +106,13 @@ const HomePage = () => {
       setMessages([]);
       setSelectedModel(null);
       setThinkEnabled(false);
+      return;
+    }
+    if (skipNextLoadRef.current) {
+      // This activeId change came from handleSend creating a brand-new
+      // conversation, not from the user switching to an existing one.
+      // handleSend already owns messages/selectedModel/thinkEnabled here.
+      skipNextLoadRef.current = false;
       return;
     }
     jumpToBottomRef.current = true;
@@ -145,6 +177,18 @@ const HomePage = () => {
     setConversations(convos.items);
   }, []);
 
+  // ---------- react to the navbar logo being clicked while already on this page ----------
+  useEffect(() => {
+    const onNewChat = () => {
+      setActiveId(null);
+      setMessages([]);
+      setError(null);
+      inputRef.current?.focus();
+    };
+    window.addEventListener("ninox:new-chat", onNewChat);
+    return () => window.removeEventListener("ninox:new-chat", onNewChat);
+  }, []);
+
   // ---------- actions ----------
   const handleNewChat = () => {
     setActiveId(null);
@@ -192,10 +236,11 @@ const HomePage = () => {
       if (!conversationId) {
         const created = await api.createConversation(null, selectedModel, thinkEnabled);
         conversationId = created.id;
+        setSelectedModel(created.model);
+        setThinkEnabled(created.think);
+        skipNextLoadRef.current = true; // suppress the session-switch effect's reload —
+                                         // handleSend owns `messages` for the rest of this send
         setActiveId(created.id);
-        // note: setActiveId triggers a message reload for the (empty) new
-        // conversation; re-add the optimistic message on top of it
-        setMessages([optimistic]);
       }
 
       let streamFailed: string | null = null;
@@ -362,7 +407,7 @@ const HomePage = () => {
       <aside
         className={`${
           sidebarOpen ? "w-64" : "w-0"
-        } shrink-0 min-h-0 overflow-hidden border-r border-[#111114]/10 dark:border-white/10 flex flex-col transition-[width] duration-200 bg-white dark:bg-[#0A0A0A]`}
+        } shrink-0 min-h-0 overflow-hidden border-r border-[#111114]/10 dark:border-white/10 flex flex-col transition-[width] duration-200 bg-white dark:bg-[#000000]`}
       >
         <div className="shrink-0 p-3 border-b border-[#111114]/10 dark:border-white/10">
           <button
@@ -405,21 +450,7 @@ const HomePage = () => {
           ))}
         </div>
 
-        {/* user footer */}
-        <div className="shrink-0 p-3 border-t border-[#111114]/10 dark:border-white/10 flex items-center justify-between gap-2">
-          <span className="truncate text-sm text-black dark:text-white" style={mono}>
-            {username}@ninoX
-          </span>
-          <button
-            onClick={handleLogout}
-            aria-label="Log out"
-            className="flex items-center gap-1 text-sm text-black dark:text-white hover:text-red-500 cursor-pointer transition-colors"
-            style={mono}
-          >
-            <LogOut size={14} />
-            exit
-          </button>
-        </div>
+        
       </aside>
 
       {/* ---------- Main: terminal chat (own scrollbar) ---------- */}
@@ -497,10 +528,10 @@ const HomePage = () => {
                         </button>
                         {expandedThinking.has(m.id) && (
                           <div
-                            className="mt-1.5 text-xs leading-relaxed text-black/60 dark:text-white/60 whitespace-pre-wrap pl-3 border-l-2 border-[#111114]/15 dark:border-white/15 max-h-56 overflow-y-auto scrollbar-premium"
+                            className="mt-1.5 text-xs leading-relaxed text-black/60 dark:text-white/60 pl-3 border-l-2 border-[#111114]/15 dark:border-white/15 max-h-56 overflow-y-auto scrollbar-premium"
                             style={mono}
                           >
-                            {m.thinking}
+                            <Markdown>{m.thinking}</Markdown>
                           </div>
                         )}
                       </div>
@@ -509,10 +540,10 @@ const HomePage = () => {
                       ninoX &gt;
                     </p>
                     <div
-                      className="text-sm leading-relaxed text-black dark:text-white whitespace-pre-wrap pl-3 border-l-2 border-[#111114]/20 dark:border-white/20"
+                      className="text-sm leading-relaxed text-black dark:text-white pl-3 border-l-2 border-[#111114]/20 dark:border-white/20"
                       style={mono}
                     >
-                      {m.content}
+                      <Markdown>{m.content}</Markdown>
                     </div>
                   </div>
                 </div>
@@ -539,10 +570,10 @@ const HomePage = () => {
                   {liveThinkExpanded && (
                     <div
                       ref={thinkingScrollRef}
-                      className="mt-1.5 text-xs leading-relaxed text-black/60 dark:text-white/60 whitespace-pre-wrap pl-3 border-l-2 border-[#111114]/15 dark:border-white/15 max-h-56 overflow-y-auto scrollbar-premium"
+                      className="mt-1.5 text-xs leading-relaxed text-black/60 dark:text-white/60 pl-3 border-l-2 border-[#111114]/15 dark:border-white/15 max-h-56 overflow-y-auto scrollbar-premium"
                       style={mono}
                     >
-                      {thinkingText}
+                      <Markdown>{thinkingText}</Markdown>
                     </div>
                   )}
                 </div>
@@ -557,10 +588,10 @@ const HomePage = () => {
                     ninoX &gt;
                   </p>
                   <div
-                    className="text-sm leading-relaxed text-black dark:text-white whitespace-pre-wrap pl-3 border-l-2 border-[#2954E3] dark:border-[#5B7FFF]"
+                    className="text-sm leading-relaxed text-black dark:text-white pl-3 border-l-2 border-[#2954E3] dark:border-[#5B7FFF]"
                     style={mono}
                   >
-                    {streamingText}
+                    <Markdown>{streamingText}</Markdown>
                     <span className="inline-block w-[7px] h-[14px] ml-0.5 align-middle bg-[#2954E3] dark:bg-[#5B7FFF] animate-pulse motion-reduce:animate-none" />
                   </div>
                 </div>

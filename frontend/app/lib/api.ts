@@ -59,6 +59,8 @@ export interface PagedResult<T> {
 
 // ---------- Token storage ----------
 
+export const ACTIVE_CONVERSATION_KEY = "nino:activeConversationId";
+
 export const tokenStore = {
   get access() {
     return typeof window === "undefined" ? null : localStorage.getItem("accessToken");
@@ -85,6 +87,7 @@ export const tokenStore = {
     localStorage.removeItem("accessToken");
     localStorage.removeItem("refreshToken");
     localStorage.removeItem("authUser");
+    sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
   },
 };
 

@@ -62,14 +62,22 @@ export const Navbar = () => {
   };
 
   const handleLogoClick = () => {
-    router.push(user ? "/home" : "/");
+    if (user) {
+      // Home page is already mounted if we're on it (client-side nav to the
+      // same route doesn't remount it), so tell it to reset to the "new
+      // chat" state itself rather than relying on a fresh mount.
+      window.dispatchEvent(new Event("ninox:new-chat"));
+      router.push("/home");
+    } else {
+      router.push("/");
+    }
   };
 
   const handleLogout = async () => {
     setMenuOpen(false);
     await api.logout();
     setUser(null);
-    router.replace("/login");
+    router.replace("/");
   };
 
   return (
