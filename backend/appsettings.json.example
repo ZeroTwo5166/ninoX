@@ -1,0 +1,19 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5432;Database=ninox;Username=postgres;Password=CHANGE_ME"
+  },
+  "AllowedHosts": "*",
+  "Jwt": {
+    "Secret": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
+    "Issuer": "backend",
+    "Audience": "backend-client",
+    "AccessTokenExpiryMinutes": 15,
+    "RefreshTokenExpiryDays": 7
+  }
+}
