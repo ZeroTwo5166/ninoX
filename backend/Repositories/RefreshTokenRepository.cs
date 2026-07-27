@@ -13,4 +13,9 @@ public class RefreshTokenRepository : GenericRepository<RefreshToken>, IRefreshT
 
     public async Task<RefreshToken?> GetByTokenAsync(string tokenHash) =>
         await _dbSet.FirstOrDefaultAsync(rt => rt.Token == tokenHash);
+
+    public async Task<List<RefreshToken>> GetActiveByUserIdAsync(Guid userId) =>
+        await _dbSet
+            .Where(rt => rt.UserId == userId && rt.RevokedAt == null && rt.ExpiresAt > DateTime.UtcNow)
+            .ToListAsync();
 }

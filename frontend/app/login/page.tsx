@@ -2,17 +2,29 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { api, tokenStore } from "../lib/api";
 
 const LoginPage = () => {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // wire up your auth call here
-    console.log({ email, password });
+    setError(null);
+    setLoading(true);
+    try {
+      const auth = await api.login(email, password);
+      tokenStore.set(auth);
+      router.push("/home");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Login failed.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -137,12 +149,22 @@ const LoginPage = () => {
               </button>
             </div>
 
+            {error && (
+              <p
+                className="text-xs text-red-500 mb-4"
+                style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace" }}
+              >
+                error: {error}
+              </p>
+            )}
+
             <button
               type="submit"
-              className="w-full text-sm text-white dark:text-black px-4 py-2.5 bg-black dark:bg-white cursor-pointer hover:bg-[#2954E3] dark:hover:bg-[#5B7FFF] transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black dark:focus-visible:outline-white"
+              disabled={loading}
+              className="w-full disabled:opacity-50 disabled:cursor-wait text-sm text-white dark:text-black px-4 py-2.5 bg-black dark:bg-white cursor-pointer hover:bg-[#2954E3] dark:hover:bg-[#5B7FFF] transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black dark:focus-visible:outline-white"
               style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace" }}
             >
-              login()
+              {loading ? "authenticating..." : "login()"}
             </button>
           </form>
         </div>

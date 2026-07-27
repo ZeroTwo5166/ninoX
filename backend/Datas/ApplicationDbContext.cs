@@ -124,6 +124,9 @@ public class ApplicationDbContext : DbContext
             entity.Property(c => c.Title)
                 .HasMaxLength(200);
 
+            entity.Property(c => c.Model)
+                .HasMaxLength(200);
+
             entity.Property(c => c.CreatedAt)
                 .HasDefaultValueSql("now()");
 

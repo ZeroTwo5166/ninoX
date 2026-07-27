@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { api, tokenStore, ApiError } from "../lib/api";
 
 const SignupPage = () => {
   const router = useRouter();
@@ -31,20 +32,18 @@ const SignupPage = () => {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firstName, lastName, dateOfBirth, email, password }),
+      const auth = await api.register({
+        firstName,
+        lastName,
+        dateOfBirth,
+        email,
+        password,
+        confirmPassword,
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.message ?? "signup failed");
-      }
-
-      router.push("/verify-email");
+      tokenStore.set(auth);
+      router.push("/home");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "something went wrong");
+      setError(err instanceof ApiError ? err.message : "something went wrong");
     } finally {
       setLoading(false);
     }

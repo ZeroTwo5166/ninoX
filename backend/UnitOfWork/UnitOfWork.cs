@@ -12,6 +12,9 @@ public class UnitOfWork : IUnitOfWork
     public IUserRepository Users { get; }
     public IRefreshTokenRepository RefreshTokens { get; }
     public IConversationRepository Conversations { get; }
+    public IMessageRepository Messages { get; }
+    public IEmailVerificationTokenRepository EmailVerificationTokens { get; }
+    public IPasswordResetTokenRepository PasswordResetTokens { get; }
 
     public UnitOfWork(ApplicationDbContext context)
     {
@@ -20,6 +23,9 @@ public class UnitOfWork : IUnitOfWork
         Users = new UserRepository(context);
         RefreshTokens = new RefreshTokenRepository(context);
         Conversations = new ConversationRepository(context);
+        Messages = new MessageRepository(context);
+        EmailVerificationTokens = new EmailVerificationTokenRepository(context);
+        PasswordResetTokens = new PasswordResetTokenRepository(context);
     }
 
     public async Task<int> SaveChangesAsync() => await _context.SaveChangesAsync();

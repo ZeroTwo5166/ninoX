@@ -25,4 +25,52 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* ---------- premium scrollbars ---------- */
+.scrollbar-premium {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(17, 17, 20, 0.22) transparent;
+}
+
+.dark .scrollbar-premium {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.scrollbar-premium::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-premium::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-premium::-webkit-scrollbar-thumb {
+  background-color: rgba(17, 17, 20, 0.22);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  transition: background-color 0.2s ease;
+}
+
+.scrollbar-premium::-webkit-scrollbar-thumb:hover {
+  background-color: #2954e3;
+}
+
+.scrollbar-premium::-webkit-scrollbar-thumb:active {
+  background-color: #2954e3;
+}
+
+.dark .scrollbar-premium::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.dark .scrollbar-premium::-webkit-scrollbar-thumb:hover,
+.dark .scrollbar-premium::-webkit-scrollbar-thumb:active {
+  background-color: #5b7fff;
+}
+
+.scrollbar-premium::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 
