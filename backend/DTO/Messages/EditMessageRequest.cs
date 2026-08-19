@@ -1,6 +1,6 @@
 namespace backend.DTO.Messages;
 
-public record SendMessageRequest(
+public record EditMessageRequest(
     string Content,
     List<string>? Images = null
 );

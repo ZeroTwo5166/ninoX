@@ -14,6 +14,10 @@ const SettingsPage = () => {
   const router = useRouter();
   const [user, setUser] = useState<UserResponse | null>(null);
 
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendMessage, setResendMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -40,6 +44,33 @@ const SettingsPage = () => {
   const handleLogout = async () => {
     await api.logout();
     router.replace("/login");
+  };
+
+  // ticks the cooldown down once a second while it's active
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const id = setTimeout(() => setResendCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(id);
+  }, [resendCooldown]);
+
+  const handleResendVerification = async () => {
+    if (!user || resending || resendCooldown > 0) return;
+    setResending(true);
+    setResendMessage(null);
+    try {
+      await api.resendVerification(user.email);
+      setResendMessage({ type: "success", text: "verification email sent, check your inbox" });
+      setResendCooldown(60);
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "failed to send verification email.";
+      setResendMessage({ type: "error", text });
+      // server enforces the real cooldown - mirror it locally so the button
+      // doesn't re-enable before the server would actually accept another request
+      const match = text.match(/(\d+)\s*seconds?/i);
+      if (match) setResendCooldown(parseInt(match[1], 10));
+    } finally {
+      setResending(false);
+    }
   };
 
   const closeChangePasswordDialog = () => {
@@ -77,8 +108,7 @@ const SettingsPage = () => {
     try {
       await api.changePassword(currentPassword, newPassword, confirmNewPassword);
       setChangePasswordSuccess(true);
-      // Backend revoked all refresh tokens (including this session's) — log out
-      // now rather than leave the user on a session that'll break silently later.
+      // backend revoked all refresh tokens, so just log out now
       setTimeout(() => {
         tokenStore.clear();
         router.replace("/login");
@@ -146,17 +176,40 @@ const SettingsPage = () => {
                 <dt className="text-xs text-black dark:text-white" style={mono}>
                   email_status
                 </dt>
-                <dd
-                  className={`text-xs px-2 py-1 rounded ${
-                    user.emailVerified
-                      ? "text-green-600 dark:text-green-400 bg-green-500/10"
-                      : "text-amber-600 dark:text-amber-400 bg-amber-500/10"
+                <dd className="flex items-center gap-2">
+                  <span
+                    className={`text-xs px-2 py-1 rounded ${
+                      user.emailVerified
+                        ? "text-green-600 dark:text-green-400 bg-green-500/10"
+                        : "text-amber-600 dark:text-amber-400 bg-amber-500/10"
+                    }`}
+                    style={mono}
+                  >
+                    {user.emailVerified ? "verified" : "unverified"}
+                  </span>
+                  {!user.emailVerified && (
+                    <button
+                      onClick={handleResendVerification}
+                      disabled={resending || resendCooldown > 0}
+                      className="text-xs text-[#2954E3] dark:text-[#5B7FFF] hover:underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed cursor-pointer transition-colors"
+                      style={mono}
+                    >
+                      {resending ? "sending..." : resendCooldown > 0 ? `resend (${resendCooldown}s)` : "verify_now()"}
+                    </button>
+                  )}
+                </dd>
+              </div>
+
+              {!user.emailVerified && resendMessage && (
+                <p
+                  className={`text-xs -mt-2 ${
+                    resendMessage.type === "success" ? "text-green-600 dark:text-green-400" : "text-red-500"
                   }`}
                   style={mono}
                 >
-                  {user.emailVerified ? "verified" : "unverified"}
-                </dd>
-              </div>
+                  {resendMessage.text}
+                </p>
+              )}
 
               <div className="flex items-center justify-between border-b border-[#111114]/10 dark:border-white/10 pb-3">
                 <dt className="text-xs text-black dark:text-white" style={mono}>
@@ -193,7 +246,7 @@ const SettingsPage = () => {
         </div>
       </div>
 
-      {/* ---------- change password dialog ---------- */}
+      {/* change password dialog */}
       {showChangePassword && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 px-4"

@@ -3,7 +3,7 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5068";
 
-// ---------- Types (mirror backend DTOs) ----------
+// types mirror the backend DTOs
 
 export interface UserResponse {
   id: string;
@@ -35,12 +35,17 @@ export interface ModelsResponse {
   defaultModel: string;
 }
 
+export interface HealthResponse {
+  online: boolean;
+}
+
 export interface MessageResponse {
   id: string;
   role: "User" | "Assistant" | "System";
   content: string;
   thinking?: string | null;
   createdAt: string;
+  images?: string[] | null;
 }
 
 export interface ConversationDetailResponse extends ConversationResponse {
@@ -57,7 +62,7 @@ export interface PagedResult<T> {
   hasNextPage: boolean;
 }
 
-// ---------- Token storage ----------
+// token storage
 
 export const ACTIVE_CONVERSATION_KEY = "nino:activeConversationId";
 
@@ -97,7 +102,7 @@ export class ApiError extends Error {
   }
 }
 
-// ---------- Core request helper (auto-refresh on 401) ----------
+// core request helper, retries once on 401 after a token refresh
 
 async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const headers: Record<string, string> = {
@@ -146,7 +151,7 @@ async function tryRefresh(): Promise<boolean> {
   }
 }
 
-// ---------- API surface ----------
+// API surface
 
 export const api = {
   // auth
@@ -186,11 +191,38 @@ export const api = {
       body: JSON.stringify({ currentPassword, newPassword, confirmNewPassword }),
     }),
 
+  resendVerification: (email: string) =>
+    request<{ message: string }>("/api/auth/resend-verification", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  verifyEmail: (token: string) =>
+    request<{ message: string }>("/api/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  forgotPassword: (email: string) =>
+    request<{ message: string }>("/api/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: (token: string, newPassword: string, confirmNewPassword: string) =>
+    request<{ message: string }>("/api/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ token, newPassword, confirmNewPassword }),
+    }),
+
   // users
   getMe: () => request<UserResponse>("/api/users/me"),
 
   // models
   getModels: () => request<ModelsResponse>("/api/models"),
+
+  // no auth needed, this is what feeds the online/offline badge
+  getHealth: (signal?: AbortSignal) => request<HealthResponse>("/api/health", { signal }),
 
   // conversations
   getConversations: (pageNumber = 1, pageSize = 50) =>
@@ -222,69 +254,105 @@ export const api = {
     request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 
   // messages
-  sendMessage: (conversationId: string, content: string) =>
+  sendMessage: (conversationId: string, content: string, images?: string[]) =>
     request<MessageResponse[]>(`/api/conversations/${conversationId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, images }),
     }),
 
-  /**
-   * Streaming send: emits ChatStreamEvents as the assistant reply is generated.
-   * Resolves when the stream completes.
-   */
-  streamMessage: async (
+  // emits ChatStreamEvents as the reply comes in, resolves when the stream ends
+  streamMessage: (
     conversationId: string,
     content: string,
+    images: string[] | undefined,
     onEvent: (event: ChatStreamEvent) => void,
     signal?: AbortSignal
-  ): Promise<void> => {
-    const doFetch = () =>
-      fetch(`${API_BASE}/api/conversations/${conversationId}/messages/stream`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(tokenStore.access ? { Authorization: `Bearer ${tokenStore.access}` } : {}),
-        },
-        body: JSON.stringify({ content }),
-        signal,
-      });
+  ): Promise<void> =>
+    postSseAuthed(`/api/conversations/${conversationId}/messages/stream`, { content, images }, onEvent, signal),
 
-    let res = await doFetch();
-    if (res.status === 401 && tokenStore.refresh) {
-      if (await tryRefresh()) res = await doFetch();
-      else tokenStore.clear();
-    }
+  regenerateMessage: (
+    conversationId: string,
+    assistantMessageId: string,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal
+  ): Promise<void> =>
+    postSseAuthed(
+      `/api/conversations/${conversationId}/messages/${assistantMessageId}/regenerate`,
+      {},
+      onEvent,
+      signal
+    ),
 
-    if (!res.ok || !res.body) {
-      throw new ApiError(res.status, `Stream request failed (${res.status})`);
-    }
+  editMessage: (
+    conversationId: string,
+    userMessageId: string,
+    content: string,
+    images: string[] | undefined,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal
+  ): Promise<void> =>
+    postSseAuthed(
+      `/api/conversations/${conversationId}/messages/${userMessageId}/edit`,
+      { content, images },
+      onEvent,
+      signal
+    ),
+};
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+// shared SSE POST helper, does the auth retry + frame parsing
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+async function postSseAuthed(
+  path: string,
+  body: unknown,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const doFetch = () =>
+    fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(tokenStore.access ? { Authorization: `Bearer ${tokenStore.access}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
 
-      buffer += decoder.decode(value, { stream: true });
+  let res = await doFetch();
+  if (res.status === 401 && tokenStore.refresh) {
+    if (await tryRefresh()) res = await doFetch();
+    else tokenStore.clear();
+  }
 
-      // SSE frames are separated by a blank line
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
+  if (!res.ok || !res.body) {
+    throw new ApiError(res.status, `Stream request failed (${res.status})`);
+  }
 
-      for (const frame of frames) {
-        const line = frame.trim();
-        if (!line.startsWith("data: ")) continue;
-        try {
-          onEvent(JSON.parse(line.slice(6)) as ChatStreamEvent);
-        } catch {
-          /* ignore malformed frame */
-        }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by a blank line
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      const line = frame.trim();
+      if (!line.startsWith("data: ")) continue;
+      try {
+        onEvent(JSON.parse(line.slice(6)) as ChatStreamEvent);
+      } catch {
+        /* ignore malformed frame */
       }
     }
-  },
-};
+  }
+}
 
 export interface ChatStreamEvent {
   type: "user" | "thinking" | "delta" | "assistant" | "error";

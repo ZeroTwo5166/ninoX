@@ -15,7 +15,7 @@ public class OllamaSettings
     public string Model { get; set; } = default!;
     public string? SystemPrompt { get; set; }
 
-    /// <summary>Disables reasoning/"thinking" output for models that support it (e.g. Qwen3).</summary>
+    // turns off reasoning/"thinking" output for models that support it (e.g. Qwen3)
     public bool Think { get; set; } = false;
 }
 
@@ -158,6 +158,23 @@ public class OllamaChatCompletionService : IChatCompletionService
         }
     }
 
+    public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(3));
+
+        try
+        {
+            var response = await _httpClient.GetAsync("/api/version", cts.Token);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Ollama unreachable or too slow to answer within the ping budget.
+            return false;
+        }
+    }
+
     private string ResolveModel(string? model) =>
         string.IsNullOrWhiteSpace(model) ? _settings.Model : model;
 
@@ -186,17 +203,26 @@ public class OllamaChatCompletionService : IChatCompletionService
                 MessageRole.Assistant => "assistant",
                 _ => "system",
             },
-            m.Content)));
+            m.Content,
+            Images: m.Images is { Count: > 0 } ? m.Images.Select(StripDataUriPrefix).ToList() : null)));
 
         return messages;
     }
 
-    // ---------- Ollama API contracts ----------
+    // we keep the full data: URI in the DB for <img src>, but Ollama just wants raw base64
+    private static string StripDataUriPrefix(string image)
+    {
+        var commaIndex = image.IndexOf(',');
+        return commaIndex >= 0 ? image[(commaIndex + 1)..] : image;
+    }
+
+    // Ollama API request/response shapes
 
     private record OllamaMessage(
         [property: JsonPropertyName("role")] string Role,
         [property: JsonPropertyName("content")] string Content,
-        [property: JsonPropertyName("thinking")] string? Thinking = null);
+        [property: JsonPropertyName("thinking")] string? Thinking = null,
+        [property: JsonPropertyName("images")] List<string>? Images = null);
 
     private record OllamaChatRequest(
         [property: JsonPropertyName("model")] string Model,

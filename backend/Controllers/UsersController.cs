@@ -15,7 +15,6 @@ public class UsersController : ApiControllerBase
         _userService = userService;
     }
 
-    /// <summary>Returns the currently authenticated user.</summary>
     [HttpGet("me")]
     public async Task<IActionResult> GetMe()
     {

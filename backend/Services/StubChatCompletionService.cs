@@ -5,9 +5,7 @@ using backend.Models;
 
 namespace backend.Services;
 
-/// <summary>
-/// Placeholder AI backend so the message flow works end-to-end without a real model.
-/// </summary>
+// placeholder so the message flow works without a real model hooked up
 public class StubChatCompletionService : IChatCompletionService
 {
     public string DefaultModel => "stub-model";
@@ -49,4 +47,7 @@ public class StubChatCompletionService : IChatCompletionService
 
     public Task<List<string>> GetAvailableModelsAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new List<string> { DefaultModel });
+
+    public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(true);
 }

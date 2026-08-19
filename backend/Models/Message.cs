@@ -10,6 +10,7 @@
         public MessageRole Role { get; set; }
         public string Content { get; set; } = default!;
         public string? Thinking { get; set; }
+        public List<string> Images { get; set; } = [];
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

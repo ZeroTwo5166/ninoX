@@ -46,4 +46,6 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+!.env.production.example
 backend/appsettings.json
+backend/appsettings.Production.json

@@ -11,6 +11,7 @@ import {
   Radio,
   Plus,
 } from "lucide-react";
+import { tokenStore } from "./lib/api";
 
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" };
 
@@ -31,8 +32,7 @@ const DEMO_MESSAGES: { role: "user" | "ai"; text: string }[] = [
   { role: "ai", text: "you asked, i remembered, we shipped it." },
 ];
 
-// prompts used to fill the horizontal band that used to hold fabricated stats —
-// real examples of what the thread can do, instead of made-up numbers.
+// real example prompts for the marquee, not made-up stats
 const PROMPT_STRIP = [
   "explain black holes like i'm 5",
   "write a haiku about debugging",
@@ -350,6 +350,13 @@ export default function Home() {
   const { log, typing, currentRole } = useChatDemo();
   const activeSection = useActiveSection(SECTIONS.map((s) => s.id));
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+
+  // skip the marketing page for logged-in users
+  useEffect(() => {
+    if (tokenStore.access) {
+      router.replace("/home");
+    }
+  }, [router]);
 
   return (
     <div className="w-full bg-[#FDFDFC] dark:bg-black transition-colors duration-300 overflow-x-hidden">

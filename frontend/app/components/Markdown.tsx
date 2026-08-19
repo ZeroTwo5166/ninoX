@@ -1,7 +1,9 @@
 "use client";
 
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" } as const;
 
@@ -92,10 +94,10 @@ const components: Components = {
   ),
 };
 
-export function Markdown({ children }: { children: string }) {
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
       {children}
     </ReactMarkdown>
   );
-}
+});

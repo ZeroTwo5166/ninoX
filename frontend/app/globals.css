@@ -25,7 +25,7 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-/* ---------- premium scrollbars ---------- */
+/* custom scrollbars */
 .scrollbar-premium {
   scrollbar-width: thin;
   scrollbar-color: rgba(17, 17, 20, 0.22) transparent;

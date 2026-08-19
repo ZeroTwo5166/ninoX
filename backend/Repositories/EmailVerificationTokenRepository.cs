@@ -13,4 +13,9 @@ public class EmailVerificationTokenRepository : GenericRepository<EmailVerificat
 
     public async Task<EmailVerificationToken?> GetByTokenAsync(string token) =>
         await _dbSet.FirstOrDefaultAsync(t => t.Token == token);
+
+    public async Task<EmailVerificationToken?> GetLatestByUserIdAsync(Guid userId) =>
+        await _dbSet.Where(t => t.UserId == userId)
+            .OrderByDescending(t => t.CreatedAt)
+            .FirstOrDefaultAsync();
 }

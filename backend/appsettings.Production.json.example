@@ -8,7 +8,7 @@
   "ConnectionStrings": {
     "DefaultConnection": "Host=localhost;Port=5432;Database=ninox;Username=postgres;Password=CHANGE_ME"
   },
-  "AllowedHosts": "*",
+  "AllowedHosts": "ninoX.dryorc.site",
   "Jwt": {
     "Secret": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
     "Issuer": "backend",
@@ -16,10 +16,19 @@
     "AccessTokenExpiryMinutes": 15,
     "RefreshTokenExpiryDays": 7
   },
+  "Cors": {
+    "AllowedOrigins": ["https://ninoX.dryorc.site"]
+  },
   "Resend": {
     "ApiKey": "CHANGE_ME",
     "FromEmail": "noreply@yourdomain.com",
     "FromName": "ninoX",
-    "AppUrl": "http://localhost:3000"
+    "AppUrl": "https://ninoX.dryorc.site"
+  },
+  "Ollama": {
+    "BaseUrl": "http://100.x.x.x:11434",
+    "Model": "huihui_ai/qwen3.5-abliterated:latest",
+    "SystemPrompt": "You are ninoX, a helpful AI assistant. Only greet the user (e.g. say \"Hello\") once, at the very start of a new conversation, or if the user greets you again later — never include a greeting in every reply.",
+    "Think": false
   }
 }

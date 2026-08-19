@@ -21,7 +21,7 @@ public class ApplicationDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
 
-        // ---------- User ----------
+        // User
         modelBuilder.Entity<User>(entity =>
         {
             entity.HasKey(u => u.Id);
@@ -58,7 +58,7 @@ public class ApplicationDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ---------- RefreshToken ----------
+        // RefreshToken
         modelBuilder.Entity<RefreshToken>(entity =>
         {
             entity.HasKey(rt => rt.Id);
@@ -74,7 +74,7 @@ public class ApplicationDbContext : DbContext
                 .HasDefaultValueSql("now()");
         });
 
-        // ---------- EmailVerificationToken ----------
+        // EmailVerificationToken
         modelBuilder.Entity<EmailVerificationToken>(entity =>
         {
             entity.HasKey(t => t.Id);
@@ -95,7 +95,7 @@ public class ApplicationDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ---------- PasswordResetToken ----------
+        // PasswordResetToken
         modelBuilder.Entity<PasswordResetToken>(entity =>
         {
             entity.HasKey(t => t.Id);
@@ -116,7 +116,7 @@ public class ApplicationDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ---------- Conversation ----------
+        // Conversation
         modelBuilder.Entity<Conversation>(entity =>
         {
             entity.HasKey(c => c.Id);
@@ -141,7 +141,7 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(c => c.UserId);
         });
 
-        // ---------- Message ----------
+        // Message
         modelBuilder.Entity<Message>(entity =>
         {
             entity.HasKey(m => m.Id);
@@ -153,6 +153,10 @@ public class ApplicationDbContext : DbContext
 
             entity.Property(m => m.Content)
                 .IsRequired();
+
+            entity.Property(m => m.Images)
+                .HasColumnType("text[]")
+                .IsRequired(false);
 
             entity.Property(m => m.CreatedAt)
                 .HasDefaultValueSql("now()");

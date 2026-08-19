@@ -1,0 +1,19 @@
+# copy to /etc/systemd/system/ninox-backend.service
+
+[Unit]
+Description=ninoX backend (ASP.NET Core)
+After=network.target postgresql.service
+
+[Service]
+WorkingDirectory=/opt/ninoX/backend
+ExecStart=/usr/bin/dotnet /opt/ninoX/backend/backend.dll
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+SyslogIdentifier=ninox-backend
+User=ninox
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5068
+
+[Install]
+WantedBy=multi-user.target

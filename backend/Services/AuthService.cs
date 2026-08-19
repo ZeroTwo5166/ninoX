@@ -12,6 +12,7 @@ public class AuthService : IAuthService
     private const int MinPasswordLength = 8;
     private static readonly TimeSpan EmailTokenLifetime = TimeSpan.FromHours(24);
     private static readonly TimeSpan ResetTokenLifetime = TimeSpan.FromHours(1);
+    private static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
 
     private readonly IUnitOfWork _unitOfWork;
     private readonly IJwtService _jwtService;
@@ -153,6 +154,15 @@ public class AuthService : IAuthService
         if (user is null || user.EmailVerified)
             return ServiceResult.Ok();
 
+        var lastToken = await _unitOfWork.EmailVerificationTokens.GetLatestByUserIdAsync(user.Id);
+        if (lastToken is not null)
+        {
+            var retryAfter = ResendCooldown - (DateTime.UtcNow - lastToken.CreatedAt);
+            if (retryAfter > TimeSpan.Zero)
+                return ServiceResult.Fail(ServiceErrorType.TooManyRequests,
+                    $"Please wait {Math.Ceiling(retryAfter.TotalSeconds)} seconds before requesting another verification email.");
+        }
+
         var verificationToken = GenerateSecureToken();
         await _unitOfWork.EmailVerificationTokens.AddAsync(new EmailVerificationToken
         {
@@ -260,8 +270,6 @@ public class AuthService : IAuthService
 
         return ServiceResult.Ok();
     }
-
-    // ---------- helpers ----------
 
     private async Task<AuthResponse> IssueTokensAsync(User user)
     {

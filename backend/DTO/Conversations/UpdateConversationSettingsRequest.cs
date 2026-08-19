@@ -1,9 +1,6 @@
 namespace backend.DTO.Conversations;
 
-/// <summary>
-/// Partial update: only fields that are non-null are applied. Lets the client
-/// change just the model, just the think flag, or both in one call.
-/// </summary>
+// only non-null fields get applied, so the client can update just one of these
 public record UpdateConversationSettingsRequest(
     string? Model,
     bool? Think

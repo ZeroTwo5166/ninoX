@@ -2,27 +2,32 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, LogOut, PanelLeft, Cpu, Brain, ChevronUp, ChevronDown, Square } from "lucide-react";
+import { Plus, Trash2, LogOut, PanelLeft, Cpu, Brain, ChevronUp, ChevronDown, Square, Pencil, ImagePlus, X, Copy, Check, RotateCw } from "lucide-react";
 import {
   ACTIVE_CONVERSATION_KEY,
   api,
   tokenStore,
+  type ChatStreamEvent,
   type ConversationResponse,
   type MessageResponse,
   type UserResponse,
 } from "../lib/api";
 import { Markdown } from "../components/Markdown";
+import { useServerStatus } from "../lib/serverStatus";
 
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" } as const;
 
 const HomePage = () => {
   const router = useRouter();
+  const serverStatus = useServerStatus();
 
   const [user, setUser] = useState<UserResponse | null>(null);
   const [conversations, setConversations] = useState<ConversationResponse[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageResponse[]>([]);
   const [input, setInput] = useState("");
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [thinkingText, setThinkingText] = useState<string | null>(null);
@@ -31,9 +36,15 @@ const HomePage = () => {
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<ConversationResponse | null>(null);
+  const [offlineDialogOpen, setOfflineDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingMessageContent, setEditingMessageContent] = useState("");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // ---------- per-conversation model / think settings ----------
+  // per-conversation model / think settings
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string | null>(null); // null = use server default
@@ -47,14 +58,17 @@ const HomePage = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const thinkingScrollRef = useRef<HTMLDivElement>(null);
 
-  // Captured once at first render, before any effect gets a chance to touch
-  // sessionStorage (the "keep active session recoverable" effect below wipes
-  // the key as soon as it sees activeId === null on mount).
+  // deltas land here first, get flushed into state in batches instead of every SSE token
+  const pendingReplyRef = useRef("");
+  const pendingThinkingRef = useRef("");
+  const streamRafRef = useRef<number | null>(null);
+
+  // grabbed before the session-recovery effect below can clear it on mount
   const savedConversationIdRef = useRef<string | null>(
     typeof window === "undefined" ? null : sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)
   );
 
-  // ---------- bootstrap: require auth, load user + sessions ----------
+  // require auth, load user + sessions
   useEffect(() => {
     if (!tokenStore.access) {
       router.replace("/login");
@@ -65,8 +79,7 @@ const HomePage = () => {
         const [me, convos] = await Promise.all([api.getMe(), api.getConversations()]);
         setUser(me);
         setConversations(convos.items);
-        // Restore whatever session was open before navigating away (e.g. to
-        // /settings) so "back to chat" doesn't dump the user into a new chat.
+        // restore whatever session was open before navigating away
         const savedId = savedConversationIdRef.current;
         if (savedId && convos.items.some((c) => c.id === savedId)) {
           setActiveId(savedId);
@@ -81,24 +94,20 @@ const HomePage = () => {
         setAvailableModels(modelsResp.models);
         setDefaultModel(modelsResp.defaultModel);
       } catch {
-        // Model list is best-effort — the backend still applies its own
-        // default per-conversation even if this fetch fails.
+        // model list is best-effort, backend has its own fallback default
       }
     })();
   }, [router]);
 
-  // ---------- keep the active session recoverable across navigation ----------
   useEffect(() => {
     if (activeId) sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, activeId);
     else sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
   }, [activeId]);
 
-  // ---------- load messages when switching sessions ----------
   const jumpToBottomRef = useRef(false);
-  const skipNextLoadRef = useRef(false); // set by handleSend right before setActiveId()
-                                          // when it just created a brand-new conversation,
-                                          // so the effect below doesn't fetch-and-overwrite
-                                          // the messages handleSend is already streaming in.
+  // set right before setActiveId() when handleSend just made a new conversation,
+  // so the effect below doesn't re-fetch and stomp on the messages it's already streaming in
+  const skipNextLoadRef = useRef(false);
 
   useEffect(() => {
     setModelMenuOpen(false);
@@ -109,9 +118,7 @@ const HomePage = () => {
       return;
     }
     if (skipNextLoadRef.current) {
-      // This activeId change came from handleSend creating a brand-new
-      // conversation, not from the user switching to an existing one.
-      // handleSend already owns messages/selectedModel/thinkEnabled here.
+      // this came from handleSend, not the user switching sessions - it already owns state here
       skipNextLoadRef.current = false;
       return;
     }
@@ -131,21 +138,25 @@ const HomePage = () => {
   }, [activeId]);
 
   useEffect(() => {
-    // Opening a conversation (or switching to one) should land straight on the
-    // latest message, like ChatGPT/Claude — no visible scroll-from-top. Only
-    // messages arriving live (sending/streaming) get the smooth scroll.
+    // opening/switching a session jumps straight to the bottom, only live messages smooth-scroll
     const behavior = jumpToBottomRef.current ? "auto" : "smooth";
     jumpToBottomRef.current = false;
     bottomRef.current?.scrollIntoView({ behavior, block: "nearest" });
   }, [messages, sending, streamingText, thinkingText]);
 
-  // ---------- keep the expanded live thinking panel pinned to its latest line ----------
   useEffect(() => {
     if (!liveThinkExpanded || !thinkingScrollRef.current) return;
     thinkingScrollRef.current.scrollTop = thinkingScrollRef.current.scrollHeight;
   }, [thinkingText, liveThinkExpanded]);
 
-  // ---------- close the delete dialog on Escape ----------
+  // grow the textarea to fit its content
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
   useEffect(() => {
     if (!pendingDelete) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -155,7 +166,15 @@ const HomePage = () => {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [pendingDelete, deleting]);
 
-  // ---------- close the model dropdown on an outside click or Escape ----------
+  useEffect(() => {
+    if (!offlineDialogOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOfflineDialogOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [offlineDialogOpen]);
+
   useEffect(() => {
     if (!modelMenuOpen) return;
     const onPointerDown = (e: MouseEvent) => {
@@ -172,12 +191,23 @@ const HomePage = () => {
     };
   }, [modelMenuOpen]);
 
+  // pulls the real messages back from the server after a failed regenerate/edit,
+  // since nothing actually got deleted server-side if the request failed
+  const syncMessagesFromServer = async (conversationId: string) => {
+    try {
+      const detail = await api.getConversation(conversationId);
+      setMessages(detail.messages);
+    } catch {
+      // best effort, just leave things as they are
+    }
+  };
+
   const refreshConversations = useCallback(async () => {
     const convos = await api.getConversations();
     setConversations(convos.items);
   }, []);
 
-  // ---------- react to the navbar logo being clicked while already on this page ----------
+  // navbar logo dispatches this when clicked while already on this page
   useEffect(() => {
     const onNewChat = () => {
       setActiveId(null);
@@ -189,7 +219,6 @@ const HomePage = () => {
     return () => window.removeEventListener("ninox:new-chat", onNewChat);
   }, []);
 
-  // ---------- actions ----------
   const handleNewChat = () => {
     setActiveId(null);
     setMessages([]);
@@ -206,25 +235,25 @@ const HomePage = () => {
     });
   };
 
-  const handleSend = async () => {
-    const content = input.trim();
-    if (!content || sending) return;
+  const handleImagesSelected = (files: FileList | null) => {
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => setPendingImages((prev) => [...prev, reader.result as string]);
+      reader.readAsDataURL(file);
+    });
+  };
 
-    setSending(true);
-    setError(null);
-    setInput("");
-    setThinkingText(null);
-    setLiveThinkExpanded(false);
+  const removePendingImage = (index: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
+  };
 
-    // optimistic user message
-    const optimistic: MessageResponse = {
-      id: `local-${Date.now()}`,
-      role: "User",
-      content,
-      createdAt: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, optimistic]);
-
+  // drives an SSE stream (send/regenerate/edit all use this) - batches chunks into
+  // streamingText/thinkingText, appends the final message, handles abort/error
+  const runStream = async (
+    startFetch: (onEvent: (event: ChatStreamEvent) => void, signal: AbortSignal) => Promise<void>,
+    onUserEvent?: (msg: MessageResponse) => void
+  ): Promise<{ status: "ok" | "aborted" | "threw"; error: string | null }> => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     let partialReply = "";
@@ -232,71 +261,85 @@ const HomePage = () => {
     let assistantFinalized = false;
 
     try {
-      let conversationId = activeId;
-      if (!conversationId) {
-        const created = await api.createConversation(null, selectedModel, thinkEnabled);
-        conversationId = created.id;
-        setSelectedModel(created.model);
-        setThinkEnabled(created.think);
-        skipNextLoadRef.current = true; // suppress the session-switch effect's reload —
-                                         // handleSend owns `messages` for the rest of this send
-        setActiveId(created.id);
-      }
-
       let streamFailed: string | null = null;
 
-      await api.streamMessage(
-        conversationId,
-        content,
-        (event) => {
-          switch (event.type) {
-            case "user":
-              if (event.message) {
-                const serverUserMsg = event.message;
-                setMessages((prev) => [
-                  ...prev.filter((m) => m.id !== optimistic.id),
-                  serverUserMsg,
-                ]);
-              }
-              break;
-            case "thinking":
-              partialThinking += event.delta ?? "";
-              setThinkingText((prev) => (prev ?? "") + (event.delta ?? ""));
-              break;
-            case "delta":
-              partialReply += event.delta ?? "";
-              setStreamingText((prev) => (prev ?? "") + (event.delta ?? ""));
-              break;
-            case "assistant":
-              assistantFinalized = true;
-              if (event.message) {
-                const finalMsg = event.message;
-                setMessages((prev) => [...prev, finalMsg]);
-              }
-              setStreamingText(null);
-              setThinkingText(null);
-              break;
-            case "error":
-              streamFailed = event.error ?? "Stream error.";
-              break;
-          }
-        },
-        controller.signal
-      );
+      // flushing every animation frame makes react-markdown re-parse way too often,
+      // so cap it a bit - still scheduled via rAF, just skips some frames
+      const MIN_FLUSH_INTERVAL_MS = 48;
+      let lastFlushAt = 0;
 
-      if (streamFailed) {
-        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-        setInput(content);
-        setError(streamFailed);
-      }
+      const flushPending = () => {
+        const now = performance.now();
+        if (now - lastFlushAt < MIN_FLUSH_INTERVAL_MS) {
+          streamRafRef.current = requestAnimationFrame(flushPending);
+          return;
+        }
+        streamRafRef.current = null;
+        lastFlushAt = now;
+        if (pendingReplyRef.current) {
+          const chunk = pendingReplyRef.current;
+          pendingReplyRef.current = "";
+          setStreamingText((prev) => (prev ?? "") + chunk);
+        }
+        if (pendingThinkingRef.current) {
+          const chunk = pendingThinkingRef.current;
+          pendingThinkingRef.current = "";
+          setThinkingText((prev) => (prev ?? "") + chunk);
+        }
+      };
 
-      await refreshConversations();
+      const scheduleFlush = () => {
+        if (streamRafRef.current === null) {
+          streamRafRef.current = requestAnimationFrame(flushPending);
+        }
+      };
+
+      const cancelPendingFlush = () => {
+        if (streamRafRef.current !== null) {
+          cancelAnimationFrame(streamRafRef.current);
+          streamRafRef.current = null;
+        }
+        pendingReplyRef.current = "";
+        pendingThinkingRef.current = "";
+      };
+
+      await startFetch((event) => {
+        switch (event.type) {
+          case "user":
+            if (event.message) onUserEvent?.(event.message);
+            break;
+          case "thinking":
+            partialThinking += event.delta ?? "";
+            pendingThinkingRef.current += event.delta ?? "";
+            scheduleFlush();
+            break;
+          case "delta":
+            partialReply += event.delta ?? "";
+            pendingReplyRef.current += event.delta ?? "";
+            scheduleFlush();
+            break;
+          case "assistant":
+            assistantFinalized = true;
+            cancelPendingFlush();
+            if (event.message) {
+              const finalMsg = event.message;
+              setMessages((prev) => [...prev, finalMsg]);
+            }
+            setStreamingText(null);
+            setThinkingText(null);
+            break;
+          case "error":
+            streamFailed = event.error ?? "Stream error.";
+            break;
+        }
+      }, controller.signal);
+
+      return { status: "ok", error: streamFailed };
     } catch (e) {
       const wasStopped = e instanceof Error && e.name === "AbortError";
       if (wasStopped) {
-        // User clicked stop() — keep whatever was generated so far as the
-        // final reply (the backend persists the same partial reply on its
-        // end once it sees the request was cancelled).
+        // user hit stop() - keep whatever was generated as the final reply,
+        // backend saves the same partial content on its end
         if (!assistantFinalized && partialReply.trim()) {
           setMessages((prev) => [
             ...prev,
@@ -309,13 +352,16 @@ const HomePage = () => {
             },
           ]);
         }
-        await refreshConversations();
-      } else {
-        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-        setInput(content); // give the text back
-        setError(e instanceof Error ? e.message : "Failed to send message.");
+        return { status: "aborted", error: null };
       }
+      return { status: "threw", error: e instanceof Error ? e.message : "Something went wrong." };
     } finally {
+      if (streamRafRef.current !== null) {
+        cancelAnimationFrame(streamRafRef.current);
+        streamRafRef.current = null;
+      }
+      pendingReplyRef.current = "";
+      pendingThinkingRef.current = "";
       setStreamingText(null);
       setThinkingText(null);
       setSending(false);
@@ -324,8 +370,157 @@ const HomePage = () => {
     }
   };
 
+  // blocks a send/regen/edit if we already know the model host is offline
+  // ("checking" is let through, better to try and fail than block on a guess)
+  const guardOnline = () => {
+    if (serverStatus === "offline") {
+      setOfflineDialogOpen(true);
+      return false;
+    }
+    return true;
+  };
+
+  const handleSend = async () => {
+    const content = input.trim();
+    const images = pendingImages;
+    if ((!content && images.length === 0) || sending) return;
+    if (!guardOnline()) return;
+
+    setSending(true);
+    setError(null);
+    setInput("");
+    setPendingImages([]);
+    setThinkingText(null);
+    setLiveThinkExpanded(false);
+
+    // optimistic user message
+    const optimistic: MessageResponse = {
+      id: `local-${Date.now()}`,
+      role: "User",
+      content,
+      createdAt: new Date().toISOString(),
+      images: images.length > 0 ? images : undefined,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+
+    let conversationId = activeId;
+    if (!conversationId) {
+      try {
+        const created = await api.createConversation(null, selectedModel, thinkEnabled);
+        conversationId = created.id;
+        setSelectedModel(created.model);
+        setThinkEnabled(created.think);
+        skipNextLoadRef.current = true; // don't let the switch-session effect reload over us
+        setActiveId(created.id);
+      } catch (e) {
+        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+        setInput(content);
+        setError(e instanceof Error ? e.message : "Failed to send message.");
+        setSending(false);
+        return;
+      }
+    }
+
+    const result = await runStream(
+      (onEvent, signal) =>
+        api.streamMessage(conversationId!, content, images.length > 0 ? images : undefined, onEvent, signal),
+      (serverUserMsg) =>
+        setMessages((prev) => [...prev.filter((m) => m.id !== optimistic.id), serverUserMsg])
+    );
+
+    if (result.status === "threw") {
+      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+      setInput(content); // give it back so nothing's lost
+      setPendingImages(images);
+      setError(result.error);
+      return;
+    }
+
+    if (result.status === "ok" && result.error) {
+      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+      setInput(content);
+      setPendingImages(images);
+      setError(result.error);
+    }
+
+    await refreshConversations();
+  };
+
   const handleStop = () => {
     abortControllerRef.current?.abort();
+  };
+
+  const handleCopy = async (id: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to copy.");
+    }
+  };
+
+  const handleRegenerate = async (assistantMessageId: string) => {
+    if (!activeId || sending) return;
+    if (!guardOnline()) return;
+
+    setSending(true);
+    setError(null);
+    setThinkingText(null);
+    setLiveThinkExpanded(false);
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === assistantMessageId);
+      return idx === -1 ? prev : prev.slice(0, idx);
+    });
+
+    const result = await runStream((onEvent, signal) =>
+      api.regenerateMessage(activeId, assistantMessageId, onEvent, signal)
+    );
+
+    if (result.status !== "aborted" && result.error) {
+      setError(result.error);
+      // nothing was actually deleted server-side on failure, so pull it back
+      await syncMessagesFromServer(activeId);
+    }
+    if (result.status !== "threw") await refreshConversations();
+  };
+
+  const startEditMessage = (m: MessageResponse) => {
+    if (sending) return;
+    setEditingMessageId(m.id);
+    setEditingMessageContent(m.content);
+  };
+
+  const cancelEditMessage = () => setEditingMessageId(null);
+
+  const handleEditAndResend = async (m: MessageResponse) => {
+    if (!activeId || sending) return;
+    const content = editingMessageContent.trim();
+    if (!content && (!m.images || m.images.length === 0)) return;
+    if (!guardOnline()) return;
+
+    setEditingMessageId(null);
+    setSending(true);
+    setError(null);
+    setThinkingText(null);
+    setLiveThinkExpanded(false);
+    setMessages((prev) => {
+      const idx = prev.findIndex((x) => x.id === m.id);
+      return idx === -1 ? prev : prev.slice(0, idx);
+    });
+
+    const result = await runStream(
+      (onEvent, signal) =>
+        api.editMessage(activeId, m.id, content, m.images ?? undefined, onEvent, signal),
+      (updatedMsg) => setMessages((prev) => [...prev, updatedMsg])
+    );
+
+    if (result.status !== "aborted" && result.error) {
+      setError(result.error);
+      // same deal as regenerate, the edit never got committed
+      await syncMessagesFromServer(activeId);
+    }
+    if (result.status !== "threw") await refreshConversations();
   };
 
   const requestDelete = (c: ConversationResponse, e: React.MouseEvent) => {
@@ -351,6 +546,27 @@ const HomePage = () => {
       setDeleting(false);
     }
   };
+
+  const startRename = (c: ConversationResponse, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sending) return; // don't rename mid-generation, mirrors requestDelete
+    setEditingId(c.id);
+    setEditingTitle(c.title ?? "");
+  };
+
+  const commitRename = async (id: string) => {
+    const title = editingTitle.trim();
+    setEditingId(null);
+    if (!title) return; // empty -> no-op, keep the existing title
+    try {
+      await api.renameConversation(id, title);
+      await refreshConversations();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to rename session.");
+    }
+  };
+
+  const cancelRename = () => setEditingId(null);
 
   const handleLogout = async () => {
     await api.logout();
@@ -403,7 +619,7 @@ const HomePage = () => {
 
   return (
     <div className="fixed inset-x-0 bottom-0 top-16 sm:top-20 flex overflow-hidden bg-[#FDFDFC] dark:bg-black transition-colors duration-300">
-      {/* ---------- Sidebar: sessions (own scrollbar) ---------- */}
+      {/* sidebar: sessions */}
       <aside
         className={`${
           sidebarOpen ? "w-64" : "w-0"
@@ -429,31 +645,58 @@ const HomePage = () => {
               no sessions yet
             </p>
           )}
-          {conversations.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => setActiveId(c.id)}
-              className={`group w-full flex items-center justify-between gap-2 px-4 py-2.5 text-left text-sm cursor-pointer transition-colors duration-150 ${
-                activeId === c.id
-                  ? "bg-[#2954E3]/10 dark:bg-[#5B7FFF]/15 text-black dark:text-white border-l-2 border-[#2954E3] dark:border-[#5B7FFF]"
-                  : "text-black dark:text-white hover:bg-[#111114]/5 dark:hover:bg-white/5 border-l-2 border-transparent"
-              }`}
-              style={mono}
-            >
-              <span className="truncate">{c.title ?? "untitled"}</span>
-              <Trash2
-                size={14}
-                className="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-500 transition-opacity"
-                onClick={(e) => requestDelete(c, e)}
-              />
-            </button>
-          ))}
+          {conversations.map((c) =>
+            editingId === c.id ? (
+              <div
+                key={c.id}
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm border-l-2 border-[#2954E3] dark:border-[#5B7FFF]"
+                style={mono}
+              >
+                <input
+                  autoFocus
+                  value={editingTitle}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename(c.id);
+                    else if (e.key === "Escape") cancelRename();
+                  }}
+                  onBlur={() => commitRename(c.id)}
+                  className="w-full bg-transparent outline-none border-b border-[#2954E3] dark:border-[#5B7FFF] text-black dark:text-white"
+                />
+              </div>
+            ) : (
+              <button
+                key={c.id}
+                onClick={() => setActiveId(c.id)}
+                className={`group w-full flex items-center justify-between gap-2 px-4 py-2.5 text-left text-sm cursor-pointer transition-colors duration-150 ${
+                  activeId === c.id
+                    ? "bg-[#2954E3]/10 dark:bg-[#5B7FFF]/15 text-black dark:text-white border-l-2 border-[#2954E3] dark:border-[#5B7FFF]"
+                    : "text-black dark:text-white hover:bg-[#111114]/5 dark:hover:bg-white/5 border-l-2 border-transparent"
+                }`}
+                style={mono}
+              >
+                <span className="truncate">{c.title ?? "untitled"}</span>
+                <span className="flex items-center gap-1.5 shrink-0">
+                  <Pencil
+                    size={13}
+                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-[#2954E3] dark:hover:text-[#5B7FFF] transition-opacity"
+                    onClick={(e) => startRename(c, e)}
+                  />
+                  <Trash2
+                    size={14}
+                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-500 transition-opacity"
+                    onClick={(e) => requestDelete(c, e)}
+                  />
+                </span>
+              </button>
+            )
+          )}
         </div>
 
         
       </aside>
 
-      {/* ---------- Main: terminal chat (own scrollbar) ---------- */}
+      {/* main chat area */}
       <main className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* window chrome */}
         <div className="shrink-0 flex items-center gap-1.5 px-4 py-3 border-b border-[#111114]/10 dark:border-white/12 bg-white dark:bg-[#0A0A0A]">
@@ -489,8 +732,8 @@ const HomePage = () => {
           <div className="max-w-3xl mx-auto flex flex-col gap-6">
             {messages.map((m) =>
               m.role === "User" ? (
-                /* ---- user message: right-aligned accent block ---- */
-                <div key={m.id} className="flex justify-end">
+                /* user message */
+                <div key={m.id} className="group flex justify-end">
                   <div className="max-w-[85%]">
                     <p
                       className="text-[10px] text-right mb-1 text-[#2954E3] dark:text-[#5B7FFF]"
@@ -498,17 +741,88 @@ const HomePage = () => {
                     >
                       {username} $
                     </p>
-                    <div
-                      className="text-sm leading-relaxed text-black dark:text-white whitespace-pre-wrap px-3.5 py-2.5 bg-[#2954E3]/8 dark:bg-[#5B7FFF]/12 border border-[#2954E3]/30 dark:border-[#5B7FFF]/30"
-                      style={mono}
-                    >
-                      {m.content}
-                    </div>
+                    {m.images && m.images.length > 0 && (
+                      <div className="flex flex-wrap justify-end gap-2 mb-2">
+                        {m.images.map((img, i) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            key={i}
+                            src={img}
+                            alt=""
+                            className="h-28 w-28 object-cover border border-[#2954E3]/30 dark:border-[#5B7FFF]/30"
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {editingMessageId === m.id ? (
+                      <div className="flex flex-col items-end gap-1.5">
+                        <textarea
+                          autoFocus
+                          rows={3}
+                          value={editingMessageContent}
+                          onChange={(e) => setEditingMessageContent(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              handleEditAndResend(m);
+                            } else if (e.key === "Escape") {
+                              cancelEditMessage();
+                            }
+                          }}
+                          className="w-full min-w-[16rem] resize-none text-sm leading-relaxed text-black dark:text-white px-3.5 py-2.5 bg-[#2954E3]/8 dark:bg-[#5B7FFF]/12 border border-[#2954E3]/40 dark:border-[#5B7FFF]/40 outline-none"
+                          style={mono}
+                        />
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={cancelEditMessage}
+                            className="text-xs text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white cursor-pointer transition-colors"
+                            style={mono}
+                          >
+                            cancel
+                          </button>
+                          <button
+                            onClick={() => handleEditAndResend(m)}
+                            className="text-xs text-white dark:text-black px-3 py-1 bg-black dark:bg-white hover:bg-[#2954E3] dark:hover:bg-[#5B7FFF] cursor-pointer transition-colors"
+                            style={mono}
+                          >
+                            save &amp; resend
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {m.content && (
+                          <div
+                            className="text-sm leading-relaxed text-black dark:text-white whitespace-pre-wrap px-3.5 py-2.5 bg-[#2954E3]/8 dark:bg-[#5B7FFF]/12 border border-[#2954E3]/30 dark:border-[#5B7FFF]/30"
+                            style={mono}
+                          >
+                            {m.content}
+                          </div>
+                        )}
+                        <div className="flex items-center justify-end gap-2.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => startEditMessage(m)}
+                            disabled={sending}
+                            aria-label="Edit message"
+                            className="text-black/50 dark:text-white/50 hover:text-[#2954E3] dark:hover:text-[#5B7FFF] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            onClick={() => handleCopy(m.id, m.content)}
+                            aria-label="Copy message"
+                            className="text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white cursor-pointer transition-colors"
+                          >
+                            {copiedId === m.id ? <Check size={12} /> : <Copy size={12} />}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               ) : (
-                /* ---- assistant message: left, labeled output block ---- */
-                <div key={m.id} className="flex justify-start">
+                /* assistant message */
+                <div key={m.id} className="group flex justify-start">
                   <div className="max-w-[85%]">
                     {m.thinking && (
                       <div className="mb-1.5">
@@ -544,6 +858,25 @@ const HomePage = () => {
                       style={mono}
                     >
                       <Markdown>{m.content}</Markdown>
+                    </div>
+                    <div className="flex items-center gap-2.5 mt-1.5 pl-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => handleCopy(m.id, m.content)}
+                        aria-label="Copy reply"
+                        className="text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white cursor-pointer transition-colors"
+                      >
+                        {copiedId === m.id ? <Check size={12} /> : <Copy size={12} />}
+                      </button>
+                      {!m.id.startsWith("local-") && (
+                        <button
+                          onClick={() => handleRegenerate(m.id)}
+                          disabled={sending}
+                          aria-label="Regenerate reply"
+                          className="text-black/50 dark:text-white/50 hover:text-[#2954E3] dark:hover:text-[#5B7FFF] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                        >
+                          <RotateCw size={12} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -620,6 +953,28 @@ const HomePage = () => {
 
         {/* input */}
         <div className="shrink-0 px-4 sm:px-8 pb-5">
+          {pendingImages.length > 0 && (
+            <div className="max-w-3xl mx-auto flex flex-wrap gap-2 mb-2">
+              {pendingImages.map((img, i) => (
+                <div key={i} className="relative group/thumb">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={img}
+                    alt=""
+                    className="h-14 w-14 object-cover border border-[#111114]/15 dark:border-white/15"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePendingImage(i)}
+                    aria-label="Remove image"
+                    className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-black dark:bg-white text-white dark:text-black opacity-0 group-hover/thumb:opacity-100 transition-opacity cursor-pointer"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="max-w-3xl mx-auto flex items-end border border-[#111114]/15 dark:border-white/18 bg-white dark:bg-[#0A0A0A] focus-within:border-[#2954E3] dark:focus-within:border-[#5B7FFF] transition-colors duration-200">
             <span className="pl-3 pb-2.5 text-black dark:text-white text-sm select-none" style={mono}>
               &gt;
@@ -632,9 +987,29 @@ const HomePage = () => {
               onKeyDown={onInputKeyDown}
               placeholder={sending ? "generating..." : "message ninoX"}
               disabled={sending}
-              className="w-full max-h-40 resize-none bg-transparent px-2 py-2.5 text-sm text-black dark:text-white placeholder:text-black/40 dark:placeholder:text-white/40 outline-none disabled:opacity-50"
+              className="w-full max-h-40 resize-none overflow-y-auto bg-transparent px-2 py-2.5 text-sm text-black dark:text-white placeholder:text-black/40 dark:placeholder:text-white/40 outline-none disabled:opacity-50 scrollbar-premium"
               style={mono}
             />
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handleImagesSelected(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={sending}
+              aria-label="Attach image"
+              className="m-1.5 text-black/60 dark:text-white/60 hover:text-[#2954E3] dark:hover:text-[#5B7FFF] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              <ImagePlus size={16} />
+            </button>
             {sending ? (
               <button
                 onClick={handleStop}
@@ -648,7 +1023,7 @@ const HomePage = () => {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={!input.trim() && pendingImages.length === 0}
                 className="m-1.5 text-sm text-white dark:text-black px-4 py-1.5 bg-black dark:bg-white cursor-pointer hover:bg-[#2954E3] dark:hover:bg-[#5B7FFF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"
                 style={mono}
               >
@@ -726,7 +1101,7 @@ const HomePage = () => {
         </div>
       </main>
 
-      {/* ---------- delete confirmation dialog ---------- */}
+      {/* delete confirmation dialog */}
       {pendingDelete && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 px-4"
@@ -770,6 +1145,48 @@ const HomePage = () => {
                 style={mono}
               >
                 {deleting ? "deleting..." : "delete()"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* offline notice dialog */}
+      {offlineDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 px-4"
+          onClick={() => setOfflineDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm border border-[#111114]/15 dark:border-white/20 bg-white dark:bg-[#0A0A0A] shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-1.5 px-4 py-3 border-b border-[#111114]/10 dark:border-white/12">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#111114]/15 dark:bg-white/20" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#111114]/15 dark:bg-white/20" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#111114]/15 dark:bg-white/20" />
+              <span className="ml-2 text-xs text-black dark:text-white" style={mono}>
+                nino --offline
+              </span>
+            </div>
+
+            <div className="px-5 py-5">
+              <p className="text-sm text-black dark:text-white mb-2" style={mono}>
+                <span className="text-red-500">$</span> model_host_unreachable()
+              </p>
+              <p className="text-xs text-black dark:text-white leading-relaxed" style={mono}>
+                The AI model is offline right now — the machine it runs on isn&apos;t reachable.
+                Try again once it&apos;s back online.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 px-5 pb-5">
+              <button
+                onClick={() => setOfflineDialogOpen(false)}
+                className="text-xs text-white dark:text-black px-3.5 py-2 bg-black dark:bg-white hover:bg-[#2954E3] dark:hover:bg-[#5B7FFF] transition-colors duration-200 cursor-pointer"
+                style={mono}
+              >
+                ok
               </button>
             </div>
           </div>

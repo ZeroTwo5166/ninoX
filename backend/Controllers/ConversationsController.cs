@@ -21,8 +21,6 @@ public class ConversationsController : ApiControllerBase
         _messageService = messageService;
     }
 
-    // ---------- Conversations ----------
-
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateConversationRequest request)
     {
@@ -67,8 +65,6 @@ public class ConversationsController : ApiControllerBase
         return result.Success ? NoContent() : FromError(result);
     }
 
-    // ---------- Messages ----------
-
     [HttpGet("{id:guid}/messages")]
     public async Task<IActionResult> GetMessages(Guid id)
     {
@@ -83,12 +79,20 @@ public class ConversationsController : ApiControllerBase
         return result.Success ? Ok(result.Data) : FromError(result);
     }
 
-    /// <summary>
-    /// Streams the assistant reply as Server-Sent Events. Each event is a JSON
-    /// ChatStreamEvent: {type: "user" | "delta" | "assistant" | "error", ...}.
-    /// </summary>
+    // SSE stream, events look like {type: "user" | "delta" | "assistant" | "error", ...}
     [HttpPost("{id:guid}/messages/stream")]
-    public async Task StreamMessage(Guid id, [FromBody] SendMessageRequest request, CancellationToken cancellationToken)
+    public Task StreamMessage(Guid id, [FromBody] SendMessageRequest request, CancellationToken cancellationToken) =>
+        WriteSseAsync(_messageService.StreamMessageAsync(CurrentUserId, id, request, cancellationToken), cancellationToken);
+
+    [HttpPost("{id:guid}/messages/{messageId:guid}/regenerate")]
+    public Task RegenerateMessage(Guid id, Guid messageId, CancellationToken cancellationToken) =>
+        WriteSseAsync(_messageService.RegenerateMessageAsync(CurrentUserId, id, messageId, cancellationToken), cancellationToken);
+
+    [HttpPost("{id:guid}/messages/{messageId:guid}/edit")]
+    public Task EditMessage(Guid id, Guid messageId, [FromBody] EditMessageRequest request, CancellationToken cancellationToken) =>
+        WriteSseAsync(_messageService.EditMessageAsync(CurrentUserId, id, messageId, request, cancellationToken), cancellationToken);
+
+    private async Task WriteSseAsync(IAsyncEnumerable<ChatStreamEvent> events, CancellationToken cancellationToken)
     {
         Response.ContentType = "text/event-stream";
         Response.Headers.CacheControl = "no-cache";
@@ -97,7 +101,7 @@ public class ConversationsController : ApiControllerBase
 
         try
         {
-            await foreach (var evt in _messageService.StreamMessageAsync(CurrentUserId, id, request, cancellationToken))
+            await foreach (var evt in events.WithCancellation(cancellationToken))
             {
                 var json = JsonSerializer.Serialize(evt, JsonOptions);
                 await Response.WriteAsync($"data: {json}\n\n", cancellationToken);
@@ -106,7 +110,7 @@ public class ConversationsController : ApiControllerBase
         }
         catch (OperationCanceledException)
         {
-            // client disconnected — MessageService already persisted the partial reply
+            // client disconnected, partial reply is already saved
         }
     }
 

@@ -5,5 +5,6 @@ public record MessageResponse(
     string Role,       // "User" | "Assistant" | "System"
     string Content,
     string? Thinking,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    List<string>? Images = null
 );

@@ -1,0 +1,17 @@
+# copy to /etc/systemd/system/ninox-frontend.service
+
+[Unit]
+Description=ninoX frontend (Next.js)
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/ninoX/frontend
+ExecStart=/opt/ninoX/frontend/node_modules/.bin/next start -p 3000
+Restart=always
+RestartSec=5
+SyslogIdentifier=ninox-frontend
+User=ninox
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

@@ -48,22 +48,24 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IMessageService, MessageService>();
 builder.Services.AddScoped<IUserService, UserService>();
-builder.Services.AddScoped<IEmailService, ConsoleEmailService>();
+builder.Services.Configure<ResendSettings>(builder.Configuration.GetSection("Resend"));
+builder.Services.AddHttpClient<IEmailService, ResendEmailService>();
 
 
 builder.Services.Configure<OllamaSettings>(builder.Configuration.GetSection("Ollama"));
 builder.Services.AddHttpClient<IChatCompletionService, OllamaChatCompletionService>();
 
 
-// ---------- CORS ----------
+// CORS
 const string FrontendCorsPolicy = "Frontend";
+
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? ["http://localhost:3000", "https://localhost:3000"];
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(FrontendCorsPolicy, policy =>
-        policy.WithOrigins(
-                "http://localhost:3000",   // Next.js dev server
-                "https://localhost:3000")
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod());
 });
@@ -71,7 +73,7 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddControllers();
 
-// ---------- Swagger ----------
+// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {

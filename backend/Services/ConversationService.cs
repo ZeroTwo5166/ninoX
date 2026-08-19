@@ -64,7 +64,9 @@ public class ConversationService : IConversationService
             conversation.CreatedAt,
             conversation.UpdatedAt,
             conversation.Messages
-                .Select(m => new MessageResponse(m.Id, m.Role.ToString(), m.Content, m.Thinking, m.CreatedAt))
+                .Select(m => new MessageResponse(
+                    m.Id, m.Role.ToString(), m.Content, m.Thinking, m.CreatedAt,
+                    m.Images is { Count: > 0 } ? m.Images : null))
                 .ToList()
         );
 

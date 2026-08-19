@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sun, Moon, Settings, LogOut } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
 import { api, tokenStore, type UserResponse } from "../lib/api";
+import { StatusBadge } from "./StatusBadge";
 
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" } as const;
 
@@ -28,8 +29,7 @@ export const Navbar = () => {
     document.documentElement.classList.toggle("dark", initial === "dark");
   }, []);
 
-  // Re-check on every route change: client-side navigation (login/logout)
-  // doesn't remount the Navbar, so this is what keeps it in sync.
+  // client-side nav doesn't remount this, so re-check on every route change
   useEffect(() => {
     setUser(tokenStore.access ? tokenStore.user : null);
     setMenuOpen(false);
@@ -63,9 +63,7 @@ export const Navbar = () => {
 
   const handleLogoClick = () => {
     if (user) {
-      // Home page is already mounted if we're on it (client-side nav to the
-      // same route doesn't remount it), so tell it to reset to the "new
-      // chat" state itself rather than relying on a fresh mount.
+      // home is likely already mounted, so tell it to reset instead of relying on remount
       window.dispatchEvent(new Event("ninox:new-chat"));
       router.push("/home");
     } else {
@@ -103,6 +101,8 @@ export const Navbar = () => {
 
       {/* Actions */}
       <div className="flex items-center gap-3 sm:gap-5">
+        <StatusBadge />
+
         <button
           onClick={toggleTheme}
           aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
